@@ -78,7 +78,7 @@ func main() {
 	deployment.Spec.Template.Spec.Containers[0].Image = imageRef
 
 	if crash {
-		fmt.Printf(`[go] Adding command = ["exit", "1"] because --crash=true\n`)
+		fmt.Println(`[go] Adding command = ["exit", "1"] because --crash=true`)
 		deployment.Spec.Template.Spec.Containers[0].Command = []string{"exit", "1"}
 	}
 
