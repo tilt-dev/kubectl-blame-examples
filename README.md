@@ -1,6 +1,6 @@
 # kubecon-2020-talk
 
-[![Build Status](https://circleci.com/gh/tilt-dev/kubecon-2020-talk/tree/master.svg?style=shield)](https://circleci.com/gh/tilt-dev/kubecon-2020-talk)
+[![Build Status](https://circleci.com/gh/tilt-dev/kubecon-2020-talk/tree/main.svg?style=shield)](https://circleci.com/gh/tilt-dev/kubecon-2020-talk)
 
 This repository contains a simplified version of Tilt that's used for teaching and talks.
 
