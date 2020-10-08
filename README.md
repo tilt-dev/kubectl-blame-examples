@@ -26,9 +26,15 @@ The main difference between each project is how they track the deployment.
 
 Creates a random image tag and label for each deployment. Watches that label.
 
+**Code:** [main.go](0-naive/main.go)
+
 ## 1-kubectl-rollout
 
-Uses the approach of `kubectl rollout`, waiting for the deployment to report success
+Uses the approach of `kubectl rollout`, waiting for the deployment to report success.
+
+**Code:** 
+- [main.go](1-kubectl-rollout/main.go)
+- [rollout.go](1-kubectl-rollout/rollout/rollout.go) forked from [rollout_status.go](https://github.com/kubernetes/kubectl/blob/master/pkg/cmd/rollout/rollout_status.go)
 
 ## 2-helm-wait
 

@@ -20,13 +20,14 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/tilt-dev/kubecon-2020-talk/1-kubectl-rollout/rollout"
 	"github.com/tilt-dev/localregistry-go"
 	"github.com/tjarratt/babble"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -34,7 +35,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
-
 	yamlEncoder "sigs.k8s.io/yaml"
 )
 
@@ -52,8 +52,6 @@ func main() {
 
 	// Generate a random label for this deployment
 	id := sanitize(babble.NewBabbler().Babble())
-	labelKey := "tilt.dev/deploy"
-	labelValue := fmt.Sprintf("deploy-%s", id)
 	if contentName == "" {
 		contentName = id
 	}
@@ -68,10 +66,10 @@ func main() {
 	contentsTarball := tarball(contents)
 
 	// Build + push
-	cmd(fmt.Sprintf("docker build -t %s -", imageRef),
+	_ = cmd(fmt.Sprintf("docker build -t %s -", imageRef),
 		withStdin(contentsTarball))
 
-	cmd(fmt.Sprintf("docker push %s", imageRef))
+	_ = cmd(fmt.Sprintf("docker push %s", imageRef))
 
 	// Modify the Deployment and apply
 	deployment := appsv1.Deployment{}
@@ -84,67 +82,13 @@ func main() {
 		deployment.Spec.Template.Spec.Containers[0].Command = []string{"exit", "1"}
 	}
 
-	fmt.Printf("[go] Adding label key=value %s=%s\n", labelKey, labelValue)
-	deployment.ObjectMeta.Labels[labelKey] = labelValue
-	deployment.Spec.Template.ObjectMeta.Labels[labelKey] = labelValue
+	_ = cmd("kubectl apply -o yaml -f -", withStdin(encode(deployment)))
 
-	cmd("kubectl apply -f -", withStdin(encode(deployment)))
-
-	color.Green("[go] SharedIndexInformer watch pods\n")
-
-	portforwardServer := newPortforwardServer(c)
-	phases := make(map[string]string)
-	containerStatuses := make(map[string]string)
-
-	// Watch for changes
-	informer := newInformer(c, v1.SchemeGroupVersion.WithResource("pods"),
-		informers.WithTweakListOptions(func(options *metav1.ListOptions) {
-			options.LabelSelector = fmt.Sprintf("%s=%s", labelKey, labelValue)
-		}))
-
-	runPodInformer(informer, func(pod *v1.Pod) {
-		name := pod.Name
-		phase := podPhase(pod)
-		cStatus := containerStatus(pod)
-
-		if phases[name] == phase && containerStatuses[name] == cStatus {
-			return
-		}
-
-		phases[name] = phase
-		containerStatuses[name] = cStatus
-		fmt.Printf("Pod: %s | Phase: %s | Container: %s | Age: %s\n", name, phase, cStatus, prettyAge(pod))
-
-		if phase == "Running" && cStatus == "Running" {
-			portforwardServer.ConnectToPod(pod, 8000)
-		}
-	})
-
-	// sleep forever
-	<-make(chan struct{})
-}
-
-func podPhase(pod *v1.Pod) string {
-	if pod.DeletionTimestamp != nil {
-		return "Terminating"
+	color.Green(fmt.Sprintf("[go] kubectl rollout status deployment my-busybox --watch %s\n", deployment.Name))
+	err := rollout.WatchRollout(context.Background(), dynamic.NewForConfigOrDie(config()), deployment.Name, 0)
+	if err != nil {
+		panic(err)
 	}
-	return string(pod.Status.Phase)
-}
-
-func containerStatus(pod *v1.Pod) string {
-	if len(pod.Status.ContainerStatuses) == 0 {
-		return ""
-	}
-
-	state := pod.Status.ContainerStatuses[0].State
-	if state.Waiting != nil {
-		return state.Waiting.Reason
-	} else if state.Running != nil {
-		return "Running"
-	} else if state.Terminated != nil {
-		return state.Terminated.Reason
-	}
-	return ""
 }
 
 func sanitize(s string) string {
@@ -204,8 +148,12 @@ func decodeFile(path string, ptr interface{}) {
 	if err != nil {
 		panic(err)
 	}
-	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewBuffer(contents), 4096)
-	err = decoder.Decode(ptr)
+	decodeBytes(contents, ptr)
+}
+
+func decodeBytes(b []byte, ptr interface{}) {
+	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewBuffer(b), 4096)
+	err := decoder.Decode(ptr)
 	if err != nil {
 		panic(err)
 	}
@@ -232,13 +180,13 @@ func withStdin(r io.Reader) cmdOption {
 	}
 }
 
-func cmd(s string, options ...cmdOption) {
+func cmd(s string, options ...cmdOption) []byte {
 	fmt.Println(s)
 	cmd := exec.Command("bash", "-c", s)
 	for _, o := range options {
 		o(cmd)
 	}
-	err := cmd.Run()
+	stdout, err := cmd.Output()
 	if err != nil {
 		exitErr, isExitError := err.(*exec.ExitError)
 		if isExitError {
@@ -247,6 +195,7 @@ func cmd(s string, options ...cmdOption) {
 		}
 		panic(err)
 	}
+	return stdout
 }
 
 func config() *rest.Config {
