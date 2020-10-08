@@ -1,3 +1,0 @@
-k8s_yaml('app/deployment.yaml')
-docker_build('my-busybox', './app')
-k8s_resource('my-busybox', port_forwards=[8000])
