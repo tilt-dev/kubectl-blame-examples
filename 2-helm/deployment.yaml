@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-busybox
+  labels:
+    app: my-busybox
+spec:
+  selector:
+    matchLabels:
+      app: my-busybox
+  template:
+    metadata:
+      labels:
+        app: my-busybox
+    spec:
+      containers:
+      - name: my-busybox
+        image: my-busybox
+        ports:
+        - containerPort: 8000
