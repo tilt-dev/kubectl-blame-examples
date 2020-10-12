@@ -13,6 +13,11 @@ spec:
       labels:
         app: my-busybox
     spec:
+      # Insert an artificial sleep to make it easier to see rollout.
+      initContainers:
+      - name: sleep-2
+        image: busybox
+        command: ["sleep", "2"]
       containers:
       - name: my-busybox
         image: my-busybox
