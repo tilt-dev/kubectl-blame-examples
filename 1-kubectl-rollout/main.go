@@ -11,7 +11,6 @@ import (
 	"io"
 	"io/ioutil"
 	"math/rand"
-	"net/http"
 	"os"
 	"os/exec"
 	"path"
@@ -25,16 +24,11 @@ import (
 	"github.com/tjarratt/babble"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/tools/portforward"
-	"k8s.io/client-go/transport/spdy"
 	yamlEncoder "sigs.k8s.io/yaml"
 )
 
@@ -58,7 +52,7 @@ func main() {
 	contents := fmt.Sprintf("Hello world! I'm deployment %s!", contentName)
 	imageTag := fmt.Sprintf("deploy-%x", md5.Sum([]byte(contentName)))
 
-	c := client()
+	c := kubernetes.NewForConfigOrDie(config())
 	imageRef := generateImageRef(c, imageTag)
 
 	// Generate the contents of index.html
@@ -209,97 +203,4 @@ func config() *rest.Config {
 		panic(err.Error())
 	}
 	return config
-}
-
-func client() *kubernetes.Clientset {
-	clientset, err := kubernetes.NewForConfig(config())
-	if err != nil {
-		panic(err.Error())
-	}
-	return clientset
-}
-
-func newInformer(cs *kubernetes.Clientset, gvr schema.GroupVersionResource, options ...informers.SharedInformerOption) cache.SharedInformer {
-	factory := informers.NewSharedInformerFactoryWithOptions(cs, 5*time.Second,
-		append([]informers.SharedInformerOption{informers.WithNamespace("default")}, options...)...)
-	resFactory, err := factory.ForResource(gvr)
-	if err != nil {
-		panic(err)
-	}
-
-	return resFactory.Informer()
-}
-
-func runPodInformer(informer cache.SharedInformer, podCallback func(pod *v1.Pod)) {
-	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
-			pod, ok := obj.(*v1.Pod)
-			if ok {
-				podCallback(pod)
-			}
-		},
-		UpdateFunc: func(_, obj interface{}) {
-			pod, ok := obj.(*v1.Pod)
-			if ok {
-				podCallback(pod)
-			}
-		},
-		DeleteFunc: func(obj interface{}) {
-			pod, ok := obj.(*v1.Pod)
-			if ok {
-				podCallback(pod)
-			}
-		},
-	})
-	go informer.Run(make(chan struct{}))
-}
-
-type portforwardServer struct {
-	cs        *kubernetes.Clientset
-	pf        *portforward.PortForwarder
-	pfPodName string
-}
-
-func newPortforwardServer(cs *kubernetes.Clientset) *portforwardServer {
-	return &portforwardServer{cs: cs}
-}
-
-func (s *portforwardServer) ConnectToPod(pod *v1.Pod, port int) {
-	if s.pfPodName == pod.Name {
-		return
-	}
-
-	if s.pf != nil {
-		s.pf.Close()
-	}
-
-	color.Green(fmt.Sprintf("Port-forward localhost:%d to %s\n", port, pod.ObjectMeta.Name))
-	transport, upgrader, err := spdy.RoundTripperFor(config())
-	if err != nil {
-		panic(err)
-	}
-
-	req := s.cs.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Namespace(pod.Namespace).
-		Name(pod.Name).
-		SubResource("portforward")
-
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, "POST", req.URL())
-	if err != nil {
-		panic(err)
-	}
-
-	pf, err := portforward.New(dialer, []string{fmt.Sprintf("%d:8000", port)},
-		make(chan struct{}, 1), make(chan struct{}, 1),
-		ioutil.Discard, ioutil.Discard)
-	if err != nil {
-		panic(err)
-	}
-	s.pf = pf
-	s.pfPodName = pod.Name
-
-	go func() {
-		_ = pf.ForwardPorts()
-	}()
 }
