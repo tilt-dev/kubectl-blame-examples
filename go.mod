@@ -1,4 +1,4 @@
-module github.com/tilt-dev/kubecon-2020-talk
+module github.com/tilt-dev/kubectl-blame-examples
 
 go 1.14
 

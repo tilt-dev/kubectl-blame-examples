@@ -1,6 +1,6 @@
-# kubecon-2020-talk
+# kubectl-blame-examples
 
-[![Build Status](https://circleci.com/gh/tilt-dev/kubecon-2020-talk/tree/main.svg?style=shield)](https://circleci.com/gh/tilt-dev/kubecon-2020-talk)
+[![Build Status](https://circleci.com/gh/tilt-dev/kubectl-blame-examples/tree/main.svg?style=shield)](https://circleci.com/gh/tilt-dev/kubectl-blame-examples)
 
 This repository contains a simplified version of Tilt that's used for teaching and talks.
 
@@ -18,7 +18,6 @@ Each sample app does the same basic flow:
 1) Build and push the image (with `docker build`, `docker push`, and [some magic](https://github.com/tilt-dev/localregistry-go) to detect the registry)
 2) Apply the deployment (with `kubectl apply`)
 3) Track the deployment's progress (with `kubernetes/client-go`)
-4) Start a port-forwarding server at `localhost:8000` when the deployment is finished
 
 The main difference between each project is how they track the deployment.
 

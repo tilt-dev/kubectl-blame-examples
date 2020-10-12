@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/tilt-dev/kubecon-2020-talk/1-kubectl-rollout/rollout"
+	"github.com/tilt-dev/kubectl-blame-examples/1-kubectl-rollout/rollout"
 	"github.com/tilt-dev/localregistry-go"
 	"github.com/tjarratt/babble"
 	appsv1 "k8s.io/api/apps/v1"
