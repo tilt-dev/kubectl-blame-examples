@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -19,18 +20,17 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/tilt-dev/kubectl-blame-examples/4-tilt/tilt"
 	"github.com/tilt-dev/localregistry-go"
 	"github.com/tjarratt/babble"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
-
 	yamlEncoder "sigs.k8s.io/yaml"
 )
 
@@ -48,8 +48,6 @@ func main() {
 
 	// Generate a random label for this deployment
 	id := sanitize(babble.NewBabbler().Babble())
-	labelKey := "tilt.dev/deploy"
-	labelValue := fmt.Sprintf("deploy-%s", id)
 	if contentName == "" {
 		contentName = id
 	}
@@ -64,10 +62,10 @@ func main() {
 	contentsTarball := tarball(contents)
 
 	// Build + push
-	cmd(fmt.Sprintf("docker build -t %s -", imageRef),
+	_ = cmd(fmt.Sprintf("docker build -t %s -", imageRef),
 		withStdin(contentsTarball))
 
-	cmd(fmt.Sprintf("docker push %s", imageRef))
+	_ = cmd(fmt.Sprintf("docker push %s", imageRef))
 
 	// Modify the Deployment and apply
 	deployment := appsv1.Deployment{}
@@ -80,32 +78,55 @@ func main() {
 		deployment.Spec.Template.Spec.Containers[0].Command = []string{"sh", "-c", "exit 1"}
 	}
 
-	fmt.Printf("[go] Adding label key=value %s=%s\n", labelKey, labelValue)
-	deployment.ObjectMeta.Labels[labelKey] = labelValue
-	deployment.Spec.Template.ObjectMeta.Labels[labelKey] = labelValue
+	hash, err := tilt.HashPodTemplateSpec(&deployment.Spec.Template)
+	if err != nil {
+		panic(err)
+	}
 
-	cmd("kubectl apply -f -", withStdin(encode(deployment)))
+	fmt.Printf("[go] Adding template hash so we can trace the pod: %s\n", hash)
+	deployment.Spec.Template.ObjectMeta.Labels[tilt.TiltPodTemplateHashLabel] = string(hash)
 
-	color.Green("[go] SharedIndexInformer watch pods\n")
+	out := cmd("kubectl apply -o yaml -f -", withStdin(encode(deployment)))
+	deploymentResult := appsv1.Deployment{}
+	decodeBytes(out, &deploymentResult)
+
+	uid := deploymentResult.UID
+	color.Green(fmt.Sprintf("[go] tilt find pods owned by UID %s\n", uid))
 
 	phases := make(map[string]string)
 	containerStatuses := make(map[string]string)
+	ignored := make(map[string]bool)
 
 	// Watch for changes
 	factory := informers.NewSharedInformerFactoryWithOptions(c, 5*time.Minute,
-		informers.WithNamespace("default"),
-		informers.WithTweakListOptions(func(options *metav1.ListOptions) {
-			options.LabelSelector = fmt.Sprintf("%s=%s", labelKey, labelValue)
-		}))
+		informers.WithNamespace("default"))
 	resFactory, err := factory.ForResource(v1.SchemeGroupVersion.WithResource("pods"))
 	if err != nil {
 		panic(err)
 	}
 	informer := resFactory.Informer()
+	ownerFetcher := tilt.NewOwnerFetcher(context.Background(), config())
 
 	done := make(chan bool)
-
 	runPodInformer(informer, func(pod *v1.Pod) {
+		tree, err := ownerFetcher.OwnerTreeOf(context.Background(), pod)
+		if err != nil {
+			log.Printf("error fetching owner tree: %v", err)
+			return
+		}
+
+		if !tree.ContainsUID(uid) {
+			return
+		}
+
+		if pod.Labels[tilt.TiltPodTemplateHashLabel] != string(hash) {
+			if !ignored[pod.Name] {
+				fmt.Printf("Pod: %s | Ignoring | (pod template hash doesn't match)\n", pod.Name)
+				ignored[pod.Name] = true
+			}
+			return
+		}
+
 		name := pod.Name
 		phase := podPhase(pod)
 		cStatus := containerStatus(pod)
@@ -124,10 +145,9 @@ func main() {
 		}
 	})
 
-	// wait until success
+	// Wait until deployed
 	<-done
 }
-
 func podPhase(pod *v1.Pod) string {
 	if pod.DeletionTimestamp != nil {
 		return "Terminating"
@@ -208,8 +228,12 @@ func decodeFile(path string, ptr interface{}) {
 	if err != nil {
 		panic(err)
 	}
-	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewBuffer(contents), 4096)
-	err = decoder.Decode(ptr)
+	decodeBytes(contents, ptr)
+}
+
+func decodeBytes(b []byte, ptr interface{}) {
+	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewBuffer(b), 4096)
+	err := decoder.Decode(ptr)
 	if err != nil {
 		panic(err)
 	}
@@ -236,13 +260,13 @@ func withStdin(r io.Reader) cmdOption {
 	}
 }
 
-func cmd(s string, options ...cmdOption) {
+func cmd(s string, options ...cmdOption) []byte {
 	fmt.Println(s)
 	cmd := exec.Command("bash", "-c", s)
 	for _, o := range options {
 		o(cmd)
 	}
-	err := cmd.Run()
+	stdout, err := cmd.Output()
 	if err != nil {
 		exitErr, isExitError := err.(*exec.ExitError)
 		if isExitError {
@@ -251,6 +275,7 @@ func cmd(s string, options ...cmdOption) {
 		}
 		panic(err)
 	}
+	return stdout
 }
 
 func config() *rest.Config {

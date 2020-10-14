@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-busybox
+  labels:
+    app: my-busybox
+spec:
+  selector:
+    matchLabels:
+      app: my-busybox
+  template:
+    metadata:
+      labels:
+        app: my-busybox
+    spec:
+      # Insert an artificial sleep to make it easier to see rollout.
+      initContainers:
+      - name: sleep-2
+        image: busybox
+        command: ["sleep", "2"]
+      containers:
+      - name: my-busybox
+        image: my-busybox
+        ports:
+        - containerPort: 8000
