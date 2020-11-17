@@ -19,12 +19,14 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/tilt-dev/localregistry-go"
+	ctlptlapi "github.com/tilt-dev/ctlptl/pkg/api"
+	"github.com/tilt-dev/ctlptl/pkg/cluster"
 	"github.com/tjarratt/babble"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -57,7 +59,8 @@ func main() {
 	imageTag := fmt.Sprintf("deploy-%x", md5.Sum([]byte(contentName)))
 
 	c := kubernetes.NewForConfigOrDie(config())
-	imageRef := generateImageRef(c, imageTag)
+	cl := currentCluster()
+	imageRef := generateImageRef(cl, imageTag)
 
 	// Generate the contents of index.html
 	fmt.Printf("Generated index.html = `%s`\n", contents)
@@ -67,7 +70,9 @@ func main() {
 	cmd(fmt.Sprintf("docker build -t %s -", imageRef),
 		withStdin(contentsTarball))
 
-	cmd(fmt.Sprintf("docker push %s", imageRef))
+	if cluster.Product(cl.Product) != cluster.ProductDockerDesktop {
+		cmd(fmt.Sprintf("docker push %s", imageRef))
+	}
 
 	// Modify the Deployment and apply
 	deployment := appsv1.Deployment{}
@@ -155,16 +160,23 @@ func sanitize(s string) string {
 	return strings.ToLower(alphaRegexp.ReplaceAllString(s, ""))
 }
 
-func generateImageRef(c *kubernetes.Clientset, tag string) string {
-	registry, _ := localregistry.Discover(context.Background(), c.CoreV1())
-	if registry.Host == "" {
-		fmt.Println("This script requires a cluster with a discoverable registry.\n" +
-			"See https://github.com/tilt-dev/kind-local for an example of how to set this up with Kind")
-		os.Exit(1)
+func generateImageRef(c *ctlptlapi.Cluster, tag string) string {
+	// If this is docker-desktop, we don't need to rename or push the image.
+	if cluster.Product(c.Product) == cluster.ProductDockerDesktop {
+		return fmt.Sprintf("my-busybox:%s", tag)
 	}
 
-	imageName := path.Join(registry.Host, "my-busybox")
-	return fmt.Sprintf("%s:%s", imageName, tag)
+	// If this cluster advertises a registry, push there.
+	registry := c.Status.LocalRegistryHosting
+	if registry != nil && registry.Host != "" {
+		imageName := path.Join(registry.Host, "my-busybox")
+		return fmt.Sprintf("%s:%s", imageName, tag)
+	}
+
+	fmt.Println("This script requires Docker Desktop or a cluster with a discoverable registry.\n" +
+		"See https://github.com/tilt-dev/ctlptl for help on how to set up a cluster with a registry.")
+	os.Exit(1)
+	return ""
 }
 
 func prettyAge(pod *v1.Pod) string {
@@ -288,4 +300,20 @@ func runPodInformer(informer cache.SharedInformer, podCallback func(pod *v1.Pod)
 		},
 	})
 	go informer.Run(make(chan struct{}))
+}
+
+func currentCluster() *ctlptlapi.Cluster {
+	c, err := cluster.DefaultController(genericclioptions.IOStreams{
+		Out:    os.Stdout,
+		ErrOut: os.Stderr,
+		In:     os.Stdin,
+	})
+	if err != nil {
+		panic(err)
+	}
+	current, err := c.Current(context.Background())
+	if err != nil {
+		panic(err)
+	}
+	return current
 }
